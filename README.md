@@ -38,9 +38,45 @@ dotnet run
 ## Практические задачи (App)
 Задачи расположены в проекте `App`, тесты — в `App.Tests`. Изначально тесты падают — это ожидаемо. Цель — реализовать пропущенную логику и добиться «зелёных» тестов.
 
-- `UsingAndDispose/T1_UsingTryFinally` — `using` ↔ `try/finally` и корректный шаблон `IDisposable` (идемпотентность, порядок вызовов, работа при исключениях).
-- `UsingAndDispose/T2_HttpClientLifetime` — практический жизненный цикл `HttpClient`, разделение владения `HttpMessageHandler`, корректный `Dispose` и запрет вызовов после освобождения.
-- `Lazy/T3_LazyCache` — потокобезопасный кэш на `Lazy<T>` с одиночной инициализацией, кэшированием исключений и защитой от гонок.
+- **UsingAndDispose/T1_UsingTryFinally — `using` ↔ `try/finally` и шаблон `IDisposable`**
+  - **Где код:** `App/Topics/UsingAndDispose/T1_UsingTryFinally/`
+  - **Нужно реализовать:**
+    - `SampleResource.Dispose()` — идемпотентно. Повторные вызовы безопасны; после `Dispose` все методы должны кидать `ObjectDisposedException`.
+    - `UsingTryFinallyRunner.RunWithUsing(ILog log, bool throwInWork)` — реализация через `using`.
+    - `UsingTryFinallyRunner.RunWithTryFinally(ILog log, bool throwInWork)` — эквивалент вручную через `try/finally`.
+    - При нормальном сценарии лог должен быть в порядке: `OPEN`, `WORK`, `DISPOSE`.
+    - Если `throwInWork=true` — «работа» кидает исключение, но `DISPOSE` всё равно пишется последним.
+  - **Что проверяют тесты:** `App.Tests/Topics/UsingAndDispose/T1_UsingTryFinally/RunnerTests.cs`
+    - `Using_and_TryFinally_produce_same_order_without_exception` — оба пути дают одинаковый порядок: `OPEN`, `WORK`, `DISPOSE`.
+    - `Using_calls_Dispose_even_if_work_throws` — при исключении из «работы» последний лог — `DISPOSE`.
+    - `SampleResource_Dispose_is_idempotent` — двойной `Dispose` не падает; последующие вызовы `Open/DoWork` → `ObjectDisposedException`.
+
+- **UsingAndDispose/T2_HttpClientLifetime — жизненный цикл `HttpClient`**
+  - **Где код:** `App/Topics/UsingAndDispose/T2_HttpClientLifetime/`
+  - **Нужно реализовать:**
+    - Конструктор без параметров — создать `SocketsHttpHandler` и `HttpClient`, пометить «владение handler=true`.
+    - Конструктор с `HttpMessageHandler externalHandler` — создать `HttpClient` поверх внешнего handler, пометить «владение handler=false`.
+    - Свойство `Timeout` — проксировать к `HttpClient.Timeout`.
+    - `GetStringAsync(Uri, CancellationToken)` — проксировать к `HttpClient.GetStringAsync`.
+    - `Dispose()` — идемпотентно. Освобождать клиент всегда; освобождать handler только если «владеем» им. После `Dispose` любые вызовы API → `ObjectDisposedException`.
+  - **Что проверяют тесты:** `App.Tests/Topics/UsingAndDispose/T2_HttpClientLifetime/HttpClientWrapperTests.cs`
+    - `Should_use_external_handler_and_not_dispose_it` — при внешнем handler контент возвращается, handler-вызовов 2, после `Dispose` обёртки сам handler не освобождён.
+    - `Should_throw_after_dispose` — после `Dispose` любой вызов API бросает `ObjectDisposedException`.
+    - `Should_apply_timeout_property` — установка/чтение `Timeout` работает.
+    - `Should_support_cancellation` — при отменённом `CancellationToken` вызывается `OperationCanceledException`.
+    - `Should_reuse_client_for_multiple_requests` — 10 вызовов подряд без пересоздания клиента; счётчик вызовов handler равен 10.
+
+- **Lazy/T3_LazyCache — потокобезопасный кэш на `Lazy<T>`**
+  - **Где код:** `App/Topics/Lazy/T3_LazyCache/`
+  - **Нужно реализовать:**
+    - Внутри — `ConcurrentDictionary<TKey, Lazy<TValue>>`.
+    - `GetOrAdd(TKey, Func<TValue>)` — один вызов фабрики на ключ (использовать `LazyThreadSafetyMode.ExecutionAndPublication`).
+    - `GetOrAdd(TKey, Func<TKey, TValue>)` — перегрузка, прокидывающая ключ в фабрику.
+    - Исключения фабрики по умолчанию кэшируются и повторно бросаются при следующем доступе к тому же ключу.
+  - **Что проверяют тесты:** `App.Tests/Topics/Lazy/T3_LazyCache/LazyCacheTests.cs`
+    - `Same_key_initialized_once_concurrently` — 20 параллельных обращений к одному ключу вызывают фабрику ровно 1 раз; все получают одинаковое значение.
+    - `Different_keys_initialized_separately` — разные ключи инициализируются независимо; счётчик фабрики равен 2.
+    - `Exception_is_cached_by_default` — первое обращение кидает `InvalidOperationException("boom")`, последующее к тому же ключу кидает то же исключение (даже если фабрика «здоровая»).
 
 ### Как работать с задачами
 1. Откройте проект `App` и изучите заготовки (в них оставлены «дырки» с `NotImplementedException`).
